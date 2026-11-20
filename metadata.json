@@ -1,0 +1,6 @@
+{
+  "name": "Earnings & Work Passport",
+  "description": "Evidence-labeled earnings and work passport for gig workers and freelancers in India with Gemini document reading, deterministic bank reconciliation rules, and consent-based read-only reports.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

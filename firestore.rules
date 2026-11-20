@@ -1,0 +1,603 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global safety net: deny everything by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Primitive Helpers ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isOwner(data) {
+      return isSignedIn() && data.userId == request.auth.uid;
+    }
+
+    function validTimestamp(ts) {
+      return ts is timestamp && ts <= request.time;
+    }
+
+    function boundedString(val, minLen, maxLen) {
+      return val is string && val.size() >= minLen && val.size() <= maxLen;
+    }
+
+    function boundedStringList(arr, maxLen) {
+      return arr is list && arr.size() <= maxLen && (arr.size() == 0 || arr[0] is string);
+    }
+
+    function isValidEvidenceStatus(status) {
+      return status in [
+        'SELF_DECLARED',
+        'DOCUMENT_EXTRACTED',
+        'SOURCE_MATCHED',
+        'SOURCE_VERIFIED_SIMULATED',
+        'DISPUTED'
+      ];
+    }
+
+    function workerOwnedByCaller(workerId) {
+      return existsAfter(/databases/$(database)/documents/workers/$(workerId)) &&
+             getAfter(/databases/$(database)/documents/workers/$(workerId)).data.userId == request.auth.uid;
+    }
+
+    // --- Entity Validation Blueprints ---
+
+    function isValidWorker(data) {
+      return data.keys().hasAll(['userId', 'displayName', 'city', 'primaryWorkType', 'demoProfile', 'createdAt', 'updatedAt']) &&
+             data.keys().hasOnly(['userId', 'displayName', 'city', 'primaryWorkType', 'demoProfile', 'createdAt', 'updatedAt']) &&
+             data.userId == request.auth.uid &&
+             boundedString(data.displayName, 1, 80) &&
+             boundedString(data.city, 0, 60) &&
+             boundedString(data.primaryWorkType, 0, 80) &&
+             data.demoProfile is bool &&
+             validTimestamp(data.createdAt) &&
+             validTimestamp(data.updatedAt);
+    }
+
+    function isValidParty(data) {
+      return data.keys().hasAll(['userId', 'workerId', 'name', 'partyType', 'contactHint', 'createdAt', 'updatedAt']) &&
+             data.keys().hasOnly([
+               'userId', 'workerId', 'name', 'partyType', 'contactHint',
+               'roles', 'phone', 'email', 'note', 'registrationNumber', 'partyContactStatus',
+               'createdAt', 'updatedAt'
+             ]) &&
+             data.userId == request.auth.uid &&
+             isValidId(data.workerId) &&
+             boundedString(data.name, 1, 100) &&
+             data.partyType in [
+               'INDIVIDUAL', 'BUSINESS', 'PLATFORM', 'PAYMENT_PROVIDER', 'OTHER',
+               'CLIENT', 'CONTRACTOR', 'HOUSEHOLD'
+             ] &&
+             boundedString(data.contactHint, 0, 100) &&
+             (!('roles' in data) || boundedStringList(data.roles, 2)) &&
+             (!('phone' in data) || boundedString(data.phone, 0, 30)) &&
+             (!('email' in data) || boundedString(data.email, 0, 100)) &&
+             (!('note' in data) || boundedString(data.note, 0, 300)) &&
+             (!('registrationNumber' in data) || (
+               boundedString(data.registrationNumber, 0, 40) &&
+               ((data.partyType != 'INDIVIDUAL' && data.partyType != 'OTHER') || data.registrationNumber == '')
+             )) &&
+             (!('partyContactStatus' in data) || data.partyContactStatus in [
+               'added_by_worker', 'contact_provided', 'outreach_sent', 'contact_verified'
+             ]) &&
+             validTimestamp(data.createdAt) &&
+             validTimestamp(data.updatedAt);
+    }
+
+    function isValidRelationship(data) {
+      return data.keys().hasAll(['userId', 'workerId', 'partyId', 'roleTitle', 'payoutCycle', 'status', 'startedOn', 'createdAt', 'updatedAt']) &&
+             data.keys().hasOnly([
+               'userId', 'workerId', 'partyId', 'roleTitle', 'payoutCycle', 'status',
+               'relationshipStatus', 'roles', 'startedOn', 'createdAt', 'updatedAt'
+             ]) &&
+             data.userId == request.auth.uid &&
+             isValidId(data.workerId) &&
+             isValidId(data.partyId) &&
+             boundedString(data.roleTitle, 1, 80) &&
+             data.payoutCycle in ['WEEKLY', 'BIWEEKLY', 'MONTHLY', 'PER_TASK'] &&
+             data.status in ['ACTIVE', 'PAUSED', 'ENDED'] &&
+             (!('relationshipStatus' in data) || data.relationshipStatus in [
+               'worker_declared', 'counterparty_acknowledged', 'confirmed_simulated', 'disputed'
+             ]) &&
+             (!('roles' in data) || boundedStringList(data.roles, 2)) &&
+             boundedString(data.startedOn, 0, 30) &&
+             validTimestamp(data.createdAt) &&
+             validTimestamp(data.updatedAt);
+    }
+
+    function isValidAiOriginalMap(m) {
+      return m is map &&
+             m.keys().size() <= 16 &&
+             m.keys().hasOnly([
+               'document_type', 'platform', 'payer', 'client_name', 'invoice_number',
+               'record_date', 'period_start', 'period_end', 'gross_amount', 'deductions',
+               'net_amount', 'invoice_amount', 'currency', 'reference',
+               'payment_status_stated', 'notes'
+             ]);
+    }
+
+    function isValidIncomeRecord(data) {
+      return data.keys().hasAll([
+               'userId', 'workerId', 'partyId', 'partyName', 'documentId',
+               'amountRupees', 'earnedDate', 'periodLabel', 'referenceCode',
+               'evidenceStatus', 'workerConfirmed', 'notes', 'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'userId', 'workerId', 'partyId', 'partyName',
+               'workGiverPartyId', 'workGiverPartyName', 'payerPartyId', 'payerPartyName',
+               'documentId',
+               'amountRupees', 'earnedDate', 'periodLabel', 'referenceCode',
+               'invoiceNumber', 'periodStart', 'periodEnd',
+               'grossAmountRupees', 'deductionsRupees', 'netAmountRupees', 'invoiceAmountRupees',
+               'aiOriginal',
+               'evidenceStatus', 'workerConfirmed', 'simulatedApi',
+               'duplicateGroupKey', 'groupedIntoRecordId', 'duplicateIgnored', 'matchOutcome',
+               'paymentStatus', 'paymentDate', 'conflictReason', 'manuallyDisputed',
+               'notes', 'createdAt', 'updatedAt'
+             ]) &&
+             data.userId == request.auth.uid &&
+             isValidId(data.workerId) &&
+             boundedString(data.partyId, 0, 128) &&
+             boundedString(data.partyName, 1, 100) &&
+             data.get('workGiverPartyId', '') is string && data.get('workGiverPartyId', '').size() <= 128 &&
+             data.get('workGiverPartyName', '') is string && data.get('workGiverPartyName', '').size() <= 100 &&
+             data.get('payerPartyId', '') is string && data.get('payerPartyId', '').size() <= 128 &&
+             data.get('payerPartyName', '') is string && data.get('payerPartyName', '').size() <= 100 &&
+             boundedString(data.documentId, 0, 128) &&
+             data.amountRupees is int && data.amountRupees >= 0 && data.amountRupees <= 100000000 &&
+             boundedString(data.earnedDate, 1, 30) &&
+             boundedString(data.periodLabel, 0, 80) &&
+             boundedString(data.referenceCode, 0, 80) &&
+             data.get('invoiceNumber', '') is string && data.get('invoiceNumber', '').size() <= 80 &&
+             data.get('periodStart', '') is string && data.get('periodStart', '').size() <= 30 &&
+             data.get('periodEnd', '') is string && data.get('periodEnd', '').size() <= 30 &&
+             data.get('grossAmountRupees', 0) is int && data.get('grossAmountRupees', 0) >= 0 &&
+             data.get('deductionsRupees', 0) is int && data.get('deductionsRupees', 0) >= 0 &&
+             data.get('netAmountRupees', 0) is int && data.get('netAmountRupees', 0) >= 0 &&
+             data.get('invoiceAmountRupees', 0) is int && data.get('invoiceAmountRupees', 0) >= 0 &&
+             (!('aiOriginal' in data) || isValidAiOriginalMap(data.aiOriginal)) &&
+             isValidEvidenceStatus(data.evidenceStatus) &&
+             data.workerConfirmed is bool &&
+             data.get('simulatedApi', false) is bool &&
+             data.get('duplicateGroupKey', '') is string && data.get('duplicateGroupKey', '').size() <= 160 &&
+             data.get('groupedIntoRecordId', '') is string && data.get('groupedIntoRecordId', '').size() <= 128 &&
+             data.get('duplicateIgnored', false) is bool &&
+             data.get('matchOutcome', 'NONE') in ['STRONG', 'POSSIBLE', 'MULTIPLE', 'NONE'] &&
+             data.get('paymentStatus', 'UNKNOWN') in ['UNKNOWN', 'PAYMENT_SENT', 'PAYMENT_PENDING', 'payer_confirmed', 'PAYER_CONFIRMED'] &&
+             data.get('paymentDate', '') is string && data.get('paymentDate', '').size() <= 30 &&
+             data.get('conflictReason', '') is string && data.get('conflictReason', '').size() <= 300 &&
+             data.get('manuallyDisputed', false) is bool &&
+             boundedString(data.notes, 0, 500) &&
+             validTimestamp(data.createdAt) &&
+             validTimestamp(data.updatedAt);
+    }
+
+    function isValidDocument(data) {
+      return data.keys().hasAll([
+               'userId', 'workerId', 'partyId', 'title', 'documentType', 'sourceKind',
+               'reviewStatus', 'extractedPartyName', 'extractedAmountRupees',
+               'extractedDate', 'extractedReference', 'extractionNotes', 'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'userId', 'workerId', 'partyId', 'title', 'documentType', 'sourceKind',
+               'reviewStatus', 'fileHash', 'extractedPartyName', 'extractedAmountRupees',
+               'extractedDate', 'extractedReference', 'extractionNotes', 'createdAt', 'updatedAt'
+             ]) &&
+             data.userId == request.auth.uid &&
+             isValidId(data.workerId) &&
+             boundedString(data.partyId, 0, 128) &&
+             boundedString(data.title, 1, 120) &&
+             data.documentType in [
+               'PLATFORM_STATEMENT', 'BANK_STATEMENT_CSV', 'INVOICE',
+               'CASH_NOTE', 'UPI_RECEIPT', 'BANK_SLIP', 'OTHER'
+             ] &&
+             data.sourceKind in ['PHOTO_PICKER', 'FILE_UPLOAD', 'CSV_IMPORT', 'SAMPLE_DOC'] &&
+             data.reviewStatus in ['PENDING_REVIEW', 'CONFIRMED', 'DISCARDED'] &&
+             (!('fileHash' in data) || boundedString(data.fileHash, 0, 128)) &&
+             boundedString(data.extractedPartyName, 0, 100) &&
+             data.extractedAmountRupees is int && data.extractedAmountRupees >= 0 && data.extractedAmountRupees <= 100000000 &&
+             boundedString(data.extractedDate, 0, 30) &&
+             boundedString(data.extractedReference, 0, 80) &&
+             boundedString(data.extractionNotes, 0, 500) &&
+             validTimestamp(data.createdAt) &&
+             validTimestamp(data.updatedAt);
+    }
+
+    function isValidBankCredit(data) {
+      return data.keys().hasAll([
+               'userId', 'workerId', 'bankLabel', 'creditDate', 'amountRupees',
+               'narration', 'utrReference', 'matchedIncomeRecordId', 'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'userId', 'workerId', 'bankLabel', 'creditDate', 'amountRupees',
+               'narration', 'utrReference', 'matchedIncomeRecordId',
+               'classificationStatus', 'evidenceStatus',
+               'createdAt', 'updatedAt'
+             ]) &&
+             data.userId == request.auth.uid &&
+             isValidId(data.workerId) &&
+             boundedString(data.bankLabel, 1, 80) &&
+             boundedString(data.creditDate, 1, 30) &&
+             data.amountRupees is int && data.amountRupees >= 0 && data.amountRupees <= 100000000 &&
+             boundedString(data.narration, 0, 200) &&
+             boundedString(data.utrReference, 0, 80) &&
+             boundedString(data.matchedIncomeRecordId, 0, 128) &&
+             (!('classificationStatus' in data) || data.classificationStatus in [
+               'UNCLASSIFIED', 'POSSIBLE_PERSONAL_TRANSFER', 'MATCHED',
+               'WORK_INCOME', 'PERSONAL_TRANSFER', 'NON_WORK_IGNORED'
+             ]) &&
+             (!('evidenceStatus' in data) || data.evidenceStatus == '' || isValidEvidenceStatus(data.evidenceStatus)) &&
+             validTimestamp(data.createdAt) &&
+             validTimestamp(data.updatedAt);
+    }
+
+    function isValidReconciliation(data) {
+      return data.keys().hasAll([
+               'userId', 'workerId', 'incomeRecordId', 'bankCreditId',
+               'matchRule', 'amountDeltaRupees', 'dateGapDays', 'decisionStatus',
+               'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'userId', 'workerId', 'incomeRecordId', 'bankCreditId',
+               'matchRule', 'amountDeltaRupees', 'dateGapDays', 'decisionStatus',
+               'matchOutcome', 'createdAt', 'updatedAt'
+             ]) &&
+             data.userId == request.auth.uid &&
+             isValidId(data.workerId) &&
+             isValidId(data.incomeRecordId) &&
+             isValidId(data.bankCreditId) &&
+             boundedString(data.matchRule, 1, 120) &&
+             data.amountDeltaRupees is int && data.amountDeltaRupees >= -100000000 && data.amountDeltaRupees <= 100000000 &&
+             data.dateGapDays is int && data.dateGapDays >= 0 && data.dateGapDays <= 365 &&
+             data.decisionStatus in ['SUGGESTED', 'CONFIRMED', 'REJECTED'] &&
+             (!('matchOutcome' in data) || data.matchOutcome in ['STRONG', 'POSSIBLE', 'MULTIPLE', 'NONE']) &&
+             validTimestamp(data.createdAt) &&
+             validTimestamp(data.updatedAt);
+    }
+
+    function isValidConfirmationRequest(data) {
+      return data.keys().hasAll([
+               'userId', 'workerId', 'incomeRecordId', 'partyId', 'partyName',
+               'requestedAmountRupees', 'status', 'responseNote', 'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'userId', 'workerId', 'incomeRecordId', 'partyId', 'partyName',
+               'workerName', 'workDescription', 'earnedDate', 'periodLabel',
+               'requestedAmountRupees', 'claimVersion', 'claimSnapshot',
+               'demoOtpCode', 'expiresAt',
+               'status', 'responseNote',
+               'workDelivered', 'confirmedAmountRupees', 'paymentSent', 'paymentDate',
+               'responses', 'responded_at', 'otp_attempts',
+               'workerResolution', 'appliedToLedgerAt',
+               'createdAt', 'updatedAt'
+             ]) &&
+             data.userId == request.auth.uid &&
+             isValidId(data.workerId) &&
+             isValidId(data.incomeRecordId) &&
+             isValidId(data.partyId) &&
+             boundedString(data.partyName, 1, 100) &&
+             data.get('workerName', '') is string && data.get('workerName', '').size() <= 80 &&
+             data.get('workDescription', '') is string && data.get('workDescription', '').size() <= 240 &&
+             data.get('earnedDate', '') is string && data.get('earnedDate', '').size() <= 30 &&
+             data.get('periodLabel', '') is string && data.get('periodLabel', '').size() <= 80 &&
+             data.requestedAmountRupees is int && data.requestedAmountRupees >= 0 && data.requestedAmountRupees <= 100000000 &&
+             data.get('claimVersion', 1) is int && data.get('claimVersion', 1) >= 1 && data.get('claimVersion', 1) <= 1000 &&
+             (!('claimSnapshot' in data) || (data.claimSnapshot is map && data.claimSnapshot.keys().size() <= 12)) &&
+             data.get('demoOtpCode', '') is string && data.get('demoOtpCode', '').size() <= 12 &&
+             (!('expiresAt' in data) || data.expiresAt is timestamp) &&
+             data.status in ['PENDING', 'RESPONDED', 'DECLINED', 'CONFIRMED_SIMULATED', 'DISPUTED'] &&
+             boundedString(data.responseNote, 0, 300) &&
+             (!('workDelivered' in data) || data.workDelivered is bool) &&
+             (!('confirmedAmountRupees' in data) || (data.confirmedAmountRupees is int && data.confirmedAmountRupees >= 0 && data.confirmedAmountRupees <= 100000000)) &&
+             (!('paymentSent' in data) || data.paymentSent is bool) &&
+             data.get('paymentDate', '') is string && data.get('paymentDate', '').size() <= 30 &&
+             (!('responses' in data) || (data.responses is map && data.responses.keys().size() <= 16)) &&
+             (!('responded_at' in data) || data.responded_at == null || validTimestamp(data.responded_at)) &&
+             data.get('otp_attempts', 0) is int && data.get('otp_attempts', 0) >= 0 && data.get('otp_attempts', 0) <= 100 &&
+             data.get('workerResolution', '') in ['', 'PENDING_REVIEW', 'CORRECTION_ACCEPTED', 'DISPUTED_BY_WORKER'] &&
+             (!('appliedToLedgerAt' in data) || data.appliedToLedgerAt == null || validTimestamp(data.appliedToLedgerAt)) &&
+             validTimestamp(data.createdAt) &&
+             validTimestamp(data.updatedAt);
+    }
+
+    function isPublicConfirmationPending(requestId) {
+      return isValidId(requestId) &&
+             requestId.size() >= 32 &&
+             existing().status == 'PENDING' &&
+             ('expiresAt' in existing()) &&
+             existing().expiresAt is timestamp &&
+             existing().expiresAt > request.time;
+    }
+
+    function isValidPublicConfirmationAnswerUpdate(data) {
+      return data.status in ['PENDING', 'RESPONDED', 'DECLINED'] &&
+             data.get('otp_attempts', 0) is int &&
+             data.get('otp_attempts', 0) >= 0 &&
+             data.get('otp_attempts', 0) <= 100 &&
+             (!('responded_at' in data) || data.responded_at == null || validTimestamp(data.responded_at)) &&
+             (!('responses' in data) || (data.responses is map && data.responses.keys().size() <= 16));
+    }
+
+    function isValidShareLink(data) {
+      return data.keys().hasAll([
+               'userId', 'workerId', 'workerName', 'shareCode', 'recipientLabel',
+               'dateRangeLabel', 'includedPartyIds', 'includedEvidenceLevels', 'maskBankRefs',
+               'expiresOn', 'status', 'totalIncludedRupees', 'summaryLines', 'consentText',
+               'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'userId', 'workerId', 'workerName', 'shareCode', 'recipientLabel',
+               'dateRangeLabel', 'includedPartyIds', 'includedEvidenceLevels', 'maskBankRefs',
+               'expiresOn', 'status', 'totalIncludedRupees', 'summaryLines', 'consentText',
+               'createdAt', 'updatedAt'
+             ]) &&
+             data.userId == request.auth.uid &&
+             isValidId(data.workerId) &&
+             boundedString(data.workerName, 1, 80) &&
+             boundedString(data.shareCode, 4, 32) &&
+             boundedString(data.recipientLabel, 1, 100) &&
+             boundedString(data.dateRangeLabel, 1, 80) &&
+             boundedStringList(data.includedPartyIds, 50) &&
+             boundedStringList(data.includedEvidenceLevels, 10) &&
+             data.maskBankRefs is bool &&
+             boundedString(data.expiresOn, 1, 30) &&
+             data.status in ['ACTIVE', 'REVOKED'] &&
+             data.totalIncludedRupees is int && data.totalIncludedRupees >= 0 && data.totalIncludedRupees <= 1000000000 &&
+             boundedStringList(data.summaryLines, 100) &&
+             boundedString(data.consentText, 1, 400) &&
+             validTimestamp(data.createdAt) &&
+             validTimestamp(data.updatedAt);
+    }
+
+    function isValidAuditLogEntry(data) {
+      return data.keys().hasAll([
+               'userId', 'workerId', 'actionType', 'actorRole',
+               'targetCollection', 'targetId', 'summary', 'createdAt'
+             ]) &&
+             data.keys().hasOnly([
+               'userId', 'workerId', 'actionType', 'actorRole',
+               'targetCollection', 'targetId', 'summary', 'createdAt'
+             ]) &&
+             data.userId == request.auth.uid &&
+             isValidId(data.workerId) &&
+             boundedString(data.actionType, 1, 60) &&
+             data.actorRole in ['WORKER', 'RULES', 'AI', 'PARTY_SIMULATED'] &&
+             boundedString(data.targetCollection, 1, 40) &&
+             boundedString(data.targetId, 0, 128) &&
+             boundedString(data.summary, 1, 300) &&
+             validTimestamp(data.createdAt);
+    }
+
+    // --- Collection Rules (All 10 Collections) ---
+
+    match /workers/{workerId} {
+      allow get: if isSignedIn() && isValidId(workerId) && isOwner(existing());
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidId(workerId) && isValidWorker(incoming());
+      allow update: if isSignedIn() &&
+                       isValidId(workerId) &&
+                       isValidWorker(incoming()) &&
+                       isOwner(existing()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().demoProfile == existing().demoProfile &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'city', 'primaryWorkType', 'updatedAt']);
+      allow delete: if isSignedIn() && isValidId(workerId) && isOwner(existing());
+    }
+
+    match /parties/{partyId} {
+      allow get: if isSignedIn() && isValidId(partyId) && isOwner(existing());
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidId(partyId) && isValidParty(incoming()) && workerOwnedByCaller(incoming().workerId);
+      allow update: if isSignedIn() &&
+                       isValidId(partyId) &&
+                       isValidParty(incoming()) &&
+                       isOwner(existing()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().workerId == existing().workerId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'name', 'partyType', 'contactHint', 'roles', 'phone', 'email',
+                         'note', 'registrationNumber', 'partyContactStatus', 'updatedAt'
+                       ]);
+      allow delete: if isSignedIn() && isValidId(partyId) && isOwner(existing());
+    }
+
+    match /relationships/{relationshipId} {
+      allow get: if isSignedIn() && isValidId(relationshipId) && isOwner(existing());
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidId(relationshipId) && isValidRelationship(incoming()) && workerOwnedByCaller(incoming().workerId);
+      allow update: if isSignedIn() &&
+                       isValidId(relationshipId) &&
+                       isValidRelationship(incoming()) &&
+                       isOwner(existing()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().workerId == existing().workerId &&
+                       incoming().partyId == existing().partyId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'roleTitle', 'payoutCycle', 'status', 'relationshipStatus',
+                         'roles', 'startedOn', 'updatedAt'
+                       ]);
+      allow delete: if isSignedIn() && isValidId(relationshipId) && isOwner(existing());
+    }
+
+    match /income_records/{recordId} {
+      allow get: if isSignedIn() && isValidId(recordId) && isOwner(existing());
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidId(recordId) && isValidIncomeRecord(incoming()) && workerOwnedByCaller(incoming().workerId);
+      allow update: if isSignedIn() &&
+                       isValidId(recordId) &&
+                       isOwner(existing()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().workerId == existing().workerId &&
+                       incoming().createdAt == existing().createdAt &&
+                       (!('aiOriginal' in existing()) || incoming().aiOriginal == existing().aiOriginal) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'partyId', 'partyName', 'workGiverPartyId', 'workGiverPartyName',
+                         'payerPartyId', 'payerPartyName', 'documentId', 'amountRupees', 'earnedDate',
+                         'periodLabel', 'referenceCode', 'invoiceNumber', 'periodStart', 'periodEnd',
+                         'grossAmountRupees', 'deductionsRupees', 'netAmountRupees', 'invoiceAmountRupees',
+                         'evidenceStatus', 'workerConfirmed', 'duplicateGroupKey', 'groupedIntoRecordId',
+                         'duplicateIgnored', 'matchOutcome', 'paymentStatus', 'paymentDate', 'conflictReason', 'manuallyDisputed',
+                         'notes', 'updatedAt'
+                       ]) &&
+                       isValidIncomeRecord(incoming());
+      allow delete: if isSignedIn() && isValidId(recordId) && isOwner(existing());
+    }
+
+    match /documents/{documentId} {
+      allow get: if isSignedIn() && isValidId(documentId) && isOwner(existing());
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidId(documentId) && isValidDocument(incoming()) && workerOwnedByCaller(incoming().workerId);
+      allow update: if isSignedIn() &&
+                       isValidId(documentId) &&
+                       isValidDocument(incoming()) &&
+                       isOwner(existing()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().workerId == existing().workerId &&
+                       incoming().sourceKind == existing().sourceKind &&
+                       (!('fileHash' in existing()) || incoming().fileHash == existing().fileHash) &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'partyId', 'title', 'documentType', 'reviewStatus',
+                         'extractedPartyName', 'extractedAmountRupees', 'extractedDate',
+                         'extractedReference', 'extractionNotes', 'updatedAt'
+                       ]);
+      allow delete: if isSignedIn() && isValidId(documentId) && isOwner(existing());
+    }
+
+    match /bank_credits/{creditId} {
+      allow get: if isSignedIn() && isValidId(creditId) && isOwner(existing());
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidId(creditId) && isValidBankCredit(incoming()) && workerOwnedByCaller(incoming().workerId);
+      allow update: if isSignedIn() &&
+                       isValidId(creditId) &&
+                       isValidBankCredit(incoming()) &&
+                       isOwner(existing()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().workerId == existing().workerId &&
+                       incoming().createdAt == existing().createdAt &&
+                       (
+                         // Action: Link/unlink bank credit or update classification/evidence status
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'matchedIncomeRecordId', 'classificationStatus', 'evidenceStatus', 'updatedAt'
+                         ]) ||
+                         // Action: Edit bank credit metadata
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'bankLabel', 'creditDate', 'amountRupees', 'narration', 'utrReference',
+                           'matchedIncomeRecordId', 'classificationStatus', 'evidenceStatus', 'updatedAt'
+                         ])
+                       );
+      allow delete: if isSignedIn() && isValidId(creditId) && isOwner(existing());
+    }
+
+    match /reconciliations/{reconciliationId} {
+      allow get: if isSignedIn() && isValidId(reconciliationId) && isOwner(existing());
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidId(reconciliationId) && isValidReconciliation(incoming()) && workerOwnedByCaller(incoming().workerId);
+      allow update: if isSignedIn() &&
+                       isValidId(reconciliationId) &&
+                       isValidReconciliation(incoming()) &&
+                       isOwner(existing()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().workerId == existing().workerId &&
+                       incoming().incomeRecordId == existing().incomeRecordId &&
+                       incoming().bankCreditId == existing().bankCreditId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['matchRule', 'amountDeltaRupees', 'dateGapDays', 'decisionStatus', 'matchOutcome', 'updatedAt']);
+      allow delete: if isSignedIn() && isValidId(reconciliationId) && isOwner(existing());
+    }
+
+    match /confirmation_requests/{requestId} {
+      // Public get allowed ONLY for >=32-char token while PENDING and not expired; owner retains full get
+      allow get: if (isSignedIn() && isValidId(requestId) && isOwner(existing())) ||
+                    isPublicConfirmationPending(requestId);
+      // Strictly deny public listing
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidId(requestId) && isValidConfirmationRequest(incoming()) && workerOwnedByCaller(incoming().workerId);
+      allow update: if (
+                       // Public counterparty update: ONLY answer fields while PENDING and not expired
+                       isPublicConfirmationPending(requestId) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'responses', 'status', 'responded_at', 'otp_attempts'
+                       ]) &&
+                       isValidPublicConfirmationAnswerUpdate(incoming())
+                     ) || (
+                       // Owner simulated confirmation update (legacy PENDING -> CONFIRMED_SIMULATED / DISPUTED)
+                       isSignedIn() &&
+                       isValidId(requestId) &&
+                       isOwner(existing()) &&
+                       existing().status == 'PENDING' &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'status', 'responseNote', 'workDelivered', 'confirmedAmountRupees',
+                         'paymentSent', 'paymentDate', 'updatedAt'
+                       ]) &&
+                       incoming().status in ['CONFIRMED_SIMULATED', 'DISPUTED'] &&
+                       boundedString(incoming().responseNote, 0, 300) &&
+                       (!('workDelivered' in incoming()) || incoming().workDelivered is bool) &&
+                       (!('confirmedAmountRupees' in incoming()) || (incoming().confirmedAmountRupees is int && incoming().confirmedAmountRupees >= 0 && incoming().confirmedAmountRupees <= 100000000)) &&
+                       (!('paymentSent' in incoming()) || incoming().paymentSent is bool) &&
+                       incoming().get('paymentDate', '') is string && incoming().get('paymentDate', '').size() <= 30 &&
+                       validTimestamp(incoming().updatedAt)
+                     ) || (
+                       // Owner review/sync update after counterparty responded or declined
+                       isSignedIn() &&
+                       isValidId(requestId) &&
+                       isOwner(existing()) &&
+                       existing().status in ['RESPONDED', 'DECLINED'] &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'workerResolution', 'appliedToLedgerAt', 'responseNote', 'updatedAt'
+                       ]) &&
+                       incoming().get('workerResolution', '') in ['', 'PENDING_REVIEW', 'CORRECTION_ACCEPTED', 'DISPUTED_BY_WORKER'] &&
+                       (!('appliedToLedgerAt' in incoming()) || incoming().appliedToLedgerAt == null || validTimestamp(incoming().appliedToLedgerAt)) &&
+                       boundedString(incoming().responseNote, 0, 300) &&
+                       validTimestamp(incoming().updatedAt)
+                     );
+      allow delete: if isSignedIn() && isValidId(requestId) && isOwner(existing());
+    }
+
+    match /share_links/{shareLinkId} {
+      allow get: if isSignedIn() && isValidId(shareLinkId) && isOwner(existing());
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidId(shareLinkId) && isValidShareLink(incoming()) && workerOwnedByCaller(incoming().workerId);
+      allow update: if isSignedIn() &&
+                       isValidId(shareLinkId) &&
+                       isValidShareLink(incoming()) &&
+                       isOwner(existing()) &&
+                       // Terminal state locking: ACTIVE -> REVOKED only
+                       existing().status == 'ACTIVE' &&
+                       incoming().status == 'REVOKED' &&
+                       incoming().userId == existing().userId &&
+                       incoming().workerId == existing().workerId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']);
+      allow delete: if isSignedIn() && isValidId(shareLinkId) && isOwner(existing());
+    }
+
+    match /audit_log/{logId} {
+      allow get: if isSignedIn() && isValidId(logId) && isOwner(existing());
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidId(logId) && isValidAuditLogEntry(incoming()) && workerOwnedByCaller(incoming().workerId);
+      // Append-only audit log: updates strictly forbidden
+      allow update: if false;
+      allow delete: if isSignedIn() && isValidId(logId) && isOwner(existing());
+    }
+  }
+}

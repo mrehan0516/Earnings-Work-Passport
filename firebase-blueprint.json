@@ -1,0 +1,309 @@
+{
+  "entities": {
+    "Worker": {
+      "title": "Worker",
+      "description": "A gig worker or freelancer profile owned by an authenticated user.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Firebase Auth UID of the owner." },
+        "displayName": { "type": "string", "description": "Worker display name (e.g. Asha Rao)." },
+        "city": { "type": "string", "description": "City in India." },
+        "primaryWorkType": { "type": "string", "description": "Primary gig or freelance work category." },
+        "demoProfile": { "type": "boolean", "description": "True if this profile uses synthetic demo data." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp via FieldValue.serverTimestamp()." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp via FieldValue.serverTimestamp()." }
+      },
+      "required": ["userId", "displayName", "city", "primaryWorkType", "demoProfile", "createdAt", "updatedAt"]
+    },
+    "Party": {
+      "title": "Party",
+      "description": "A person, business, platform, payment provider, or other party the worker earns from.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Firebase Auth UID of the owner." },
+        "workerId": { "type": "string", "description": "Owning worker profile document ID." },
+        "name": { "type": "string", "description": "Display name of work source, client, or payer." },
+        "partyType": { "type": "string", "enum": ["INDIVIDUAL", "BUSINESS", "PLATFORM", "PAYMENT_PROVIDER", "OTHER", "CLIENT", "CONTRACTOR", "HOUSEHOLD"] },
+        "contactHint": { "type": "string", "description": "Non-sensitive synthetic contact or handle hint." },
+        "roles": { "type": "array", "description": "Party roles: WORK_GIVER and/or PAYER." },
+        "phone": { "type": "string", "description": "Optional phone number." },
+        "email": { "type": "string", "description": "Optional email address." },
+        "note": { "type": "string", "description": "Optional worker note about this party." },
+        "registrationNumber": { "type": "string", "description": "Optional registration/GSTIN for non-individual parties only (empty for individuals)." },
+        "partyContactStatus": { "type": "string", "enum": ["added_by_worker", "contact_provided", "outreach_sent", "contact_verified"], "description": "Contact provenance status; contact_verified only proves channel/OTP control, not legal identity." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp via FieldValue.serverTimestamp()." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp via FieldValue.serverTimestamp()." }
+      },
+      "required": ["userId", "workerId", "name", "partyType", "contactHint", "createdAt", "updatedAt"]
+    },
+    "Relationship": {
+      "title": "Relationship",
+      "description": "Work relationship between a worker and a party.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Firebase Auth UID of the owner." },
+        "workerId": { "type": "string", "description": "Owning worker profile document ID." },
+        "partyId": { "type": "string", "description": "Referenced party document ID." },
+        "roleTitle": { "type": "string", "description": "Worker role for this party." },
+        "payoutCycle": { "type": "string", "enum": ["WEEKLY", "BIWEEKLY", "MONTHLY", "PER_TASK"] },
+        "status": { "type": "string", "enum": ["ACTIVE", "PAUSED", "ENDED"] },
+        "relationshipStatus": { "type": "string", "enum": ["worker_declared", "counterparty_acknowledged", "confirmed_simulated", "disputed"], "description": "Relationship declaration status; starts as worker_declared." },
+        "roles": { "type": "array", "description": "Mirrored party roles (WORK_GIVER / PAYER)." },
+        "startedOn": { "type": "string", "description": "ISO date YYYY-MM-DD." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp via FieldValue.serverTimestamp()." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp via FieldValue.serverTimestamp()." }
+      },
+      "required": ["userId", "workerId", "partyId", "roleTitle", "payoutCycle", "status", "startedOn", "createdAt", "updatedAt"]
+    },
+    "IncomeRecord": {
+      "title": "IncomeRecord",
+      "description": "An individual earnings entry carrying an explicit evidence label.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Firebase Auth UID of the owner." },
+        "workerId": { "type": "string", "description": "Owning worker profile document ID." },
+        "partyId": { "type": "string", "description": "Primary linked party document ID or empty string." },
+        "partyName": { "type": "string", "description": "Primary display name of the work source or payer." },
+        "workGiverPartyId": { "type": "string", "description": "Optional linked party ID for who gave the work." },
+        "workGiverPartyName": { "type": "string", "description": "Optional display name for who gave the work." },
+        "payerPartyId": { "type": "string", "description": "Optional linked party ID for who paid." },
+        "payerPartyName": { "type": "string", "description": "Optional display name for who paid." },
+        "documentId": { "type": "string", "description": "Linked document ID or empty string." },
+        "amountRupees": { "type": "integer", "description": "Amount in whole Indian Rupees." },
+        "earnedDate": { "type": "string", "description": "ISO date YYYY-MM-DD." },
+        "periodLabel": { "type": "string", "description": "Human-readable earning period." },
+        "referenceCode": { "type": "string", "description": "Payout reference or invoice number." },
+        "invoiceNumber": { "type": "string", "description": "Optional invoice number confirmed by worker." },
+        "periodStart": { "type": "string", "description": "Optional period start date YYYY-MM-DD." },
+        "periodEnd": { "type": "string", "description": "Optional period end date YYYY-MM-DD." },
+        "grossAmountRupees": { "type": "integer", "description": "Optional gross amount in Rupees." },
+        "deductionsRupees": { "type": "integer", "description": "Optional deductions amount in Rupees." },
+        "netAmountRupees": { "type": "integer", "description": "Optional net payout amount in Rupees." },
+        "invoiceAmountRupees": { "type": "integer", "description": "Optional invoice total in Rupees." },
+        "aiOriginal": { "type": "object", "description": "Immutable snapshot of the exact values originally extracted by Gemini AI." },
+        "evidenceStatus": {
+          "type": "string",
+          "enum": ["SELF_DECLARED", "DOCUMENT_EXTRACTED", "SOURCE_MATCHED", "SOURCE_VERIFIED_SIMULATED", "DISPUTED"]
+        },
+        "workerConfirmed": { "type": "boolean", "description": "True once the worker explicitly confirmed every value." },
+        "simulatedApi": { "type": "boolean", "description": "True if this record came from a simulated API platform feed." },
+        "duplicateGroupKey": { "type": "string", "description": "Normalized duplicate grouping key (fileHash or event key)." },
+        "groupedIntoRecordId": { "type": "string", "description": "Primary income record ID when this record is grouped as a secondary duplicate." },
+        "duplicateIgnored": { "type": "boolean", "description": "True when the worker chose Ignore duplicate to archive the duplicate alert without deleting the record." },
+        "matchOutcome": { "type": "string", "enum": ["STRONG", "POSSIBLE", "MULTIPLE", "NONE"], "description": "Deterministic reconciliation match outcome." },
+        "paymentStatus": { "type": "string", "enum": ["UNKNOWN", "PAYMENT_SENT", "PAYMENT_PENDING", "payer_confirmed", "PAYER_CONFIRMED"], "description": "Payment status from client confirmation." },
+        "paymentDate": { "type": "string", "description": "Client-stated payment date YYYY-MM-DD." },
+        "conflictReason": { "type": "string", "description": "Deterministic conflict explanation when labeled DISPUTED." },
+        "manuallyDisputed": { "type": "boolean", "description": "True when worker manually flagged record as disputed." },
+        "notes": { "type": "string", "description": "Worker notes or explanation." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp via FieldValue.serverTimestamp()." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp via FieldValue.serverTimestamp()." }
+      },
+      "required": [
+        "userId", "workerId", "partyId", "partyName", "documentId",
+        "amountRupees", "earnedDate", "periodLabel", "referenceCode",
+        "evidenceStatus", "workerConfirmed", "notes", "createdAt", "updatedAt"
+      ]
+    },
+    "IncomeDocument": {
+      "title": "IncomeDocument",
+      "description": "An uploaded or sample income document read by Gemini AI into draft fields.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Firebase Auth UID of the owner." },
+        "workerId": { "type": "string", "description": "Owning worker profile document ID." },
+        "partyId": { "type": "string", "description": "Linked party ID or empty string." },
+        "title": { "type": "string", "description": "Document display title." },
+        "documentType": { "type": "string", "enum": ["PLATFORM_STATEMENT", "BANK_STATEMENT_CSV", "INVOICE", "CASH_NOTE", "UPI_RECEIPT", "BANK_SLIP", "OTHER"] },
+        "sourceKind": { "type": "string", "enum": ["PHOTO_PICKER", "FILE_UPLOAD", "CSV_IMPORT", "SAMPLE_DOC"] },
+        "reviewStatus": { "type": "string", "enum": ["PENDING_REVIEW", "CONFIRMED", "DISCARDED"] },
+        "fileHash": { "type": "string", "description": "SHA-256 hex digest of the uploaded file for per-worker duplicate file detection." },
+        "extractedPartyName": { "type": "string", "description": "Candidate payer name extracted by AI." },
+        "extractedAmountRupees": { "type": "integer", "description": "Candidate amount in Rupees extracted by AI." },
+        "extractedDate": { "type": "string", "description": "Candidate date extracted by AI." },
+        "extractedReference": { "type": "string", "description": "Candidate reference/UTR extracted by AI." },
+        "extractionNotes": { "type": "string", "description": "Plain-English AI reading summary and uncertainty notes." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp via FieldValue.serverTimestamp()." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp via FieldValue.serverTimestamp()." }
+      },
+      "required": [
+        "userId", "workerId", "partyId", "title", "documentType", "sourceKind",
+        "reviewStatus", "extractedPartyName", "extractedAmountRupees",
+        "extractedDate", "extractedReference", "extractionNotes", "createdAt", "updatedAt"
+      ]
+    },
+    "BankCredit": {
+      "title": "BankCredit",
+      "description": "A synthetic bank or UPI credit line used for deterministic rule reconciliation.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Firebase Auth UID of the owner." },
+        "workerId": { "type": "string", "description": "Owning worker profile document ID." },
+        "bankLabel": { "type": "string", "description": "Masked bank account label." },
+        "creditDate": { "type": "string", "description": "ISO date YYYY-MM-DD." },
+        "amountRupees": { "type": "integer", "description": "Credit amount in whole Rupees." },
+        "narration": { "type": "string", "description": "Bank credit narration text." },
+        "utrReference": { "type": "string", "description": "UTR or IMPS/UPI transaction reference." },
+        "matchedIncomeRecordId": { "type": "string", "description": "Matched income_records document ID or empty string." },
+        "classificationStatus": { "type": "string", "enum": ["UNCLASSIFIED", "POSSIBLE_PERSONAL_TRANSFER", "MATCHED", "WORK_INCOME", "PERSONAL_TRANSFER", "NON_WORK_IGNORED"] },
+        "evidenceStatus": { "type": "string", "description": "SOURCE_MATCHED when matched to an income item; empty otherwise." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp via FieldValue.serverTimestamp()." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp via FieldValue.serverTimestamp()." }
+      },
+      "required": [
+        "userId", "workerId", "bankLabel", "creditDate", "amountRupees",
+        "narration", "utrReference", "matchedIncomeRecordId", "createdAt", "updatedAt"
+      ]
+    },
+    "Reconciliation": {
+      "title": "Reconciliation",
+      "description": "Deterministic rule match between an income record and a bank credit.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Firebase Auth UID of the owner." },
+        "workerId": { "type": "string", "description": "Owning worker profile document ID." },
+        "incomeRecordId": { "type": "string", "description": "Referenced income record ID." },
+        "bankCreditId": { "type": "string", "description": "Referenced bank credit ID." },
+        "matchRule": { "type": "string", "description": "Plain-English name of the matching rule applied." },
+        "amountDeltaRupees": { "type": "integer", "description": "Difference between income record and bank credit in Rupees." },
+        "dateGapDays": { "type": "integer", "description": "Days between earned date and bank credit date." },
+        "decisionStatus": { "type": "string", "enum": ["SUGGESTED", "CONFIRMED", "REJECTED"] },
+        "matchOutcome": { "type": "string", "enum": ["STRONG", "POSSIBLE", "MULTIPLE", "NONE"] },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp via FieldValue.serverTimestamp()." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp via FieldValue.serverTimestamp()." }
+      },
+      "required": [
+        "userId", "workerId", "incomeRecordId", "bankCreditId",
+        "matchRule", "amountDeltaRupees", "dateGapDays", "decisionStatus", "createdAt", "updatedAt"
+      ]
+    },
+    "ConfirmationRequest": {
+      "title": "ConfirmationRequest",
+      "description": "Counterparty confirmation request keyed by a cryptographically random >=32-char token (or simulated legacy id).",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Firebase Auth UID of the owner." },
+        "workerId": { "type": "string", "description": "Owning worker profile document ID." },
+        "incomeRecordId": { "type": "string", "description": "Referenced income record ID." },
+        "partyId": { "type": "string", "description": "Referenced party ID." },
+        "partyName": { "type": "string", "description": "Display name of the party." },
+        "workerName": { "type": "string", "description": "Display name of the worker requesting confirmation." },
+        "workDescription": { "type": "string", "description": "Scoped work description for this single income record." },
+        "earnedDate": { "type": "string", "description": "ISO date YYYY-MM-DD for this income record." },
+        "periodLabel": { "type": "string", "description": "Human-readable earning period for this record." },
+        "requestedAmountRupees": { "type": "integer", "description": "Amount requested for confirmation." },
+        "claimVersion": { "type": "integer", "description": "Monotonic version number of the claim shown to the counterparty." },
+        "claimSnapshot": { "type": "object", "description": "Immutable snapshot of the exact claim details shown to the counterparty." },
+        "demoOtpCode": { "type": "string", "description": "Initial 6-digit DEMO OTP code (not a real SMS)." },
+        "expiresAt": { "type": "string", "format": "date-time", "description": "Expiration timestamp (7 days from creation)." },
+        "status": { "type": "string", "enum": ["PENDING", "RESPONDED", "DECLINED", "CONFIRMED_SIMULATED", "DISPUTED"] },
+        "responseNote": { "type": "string", "description": "Summary or response note." },
+        "workDelivered": { "type": "boolean", "description": "Optional legacy client answer on whether work was delivered." },
+        "confirmedAmountRupees": { "type": "integer", "description": "Optional legacy amount confirmed or corrected by the client." },
+        "paymentSent": { "type": "boolean", "description": "Optional legacy client answer on whether payment was sent." },
+        "paymentDate": { "type": "string", "description": "Optional ISO date YYYY-MM-DD when client sent payment." },
+        "responses": { "type": "object", "description": "Per-question counterparty answers (yes/no/unsure/corrected_amount/declined), claim version shown, and OTP metadata." },
+        "responded_at": { "type": "string", "format": "date-time", "description": "Timestamp when counterparty submitted their answers." },
+        "otp_attempts": { "type": "integer", "description": "Number of failed DEMO OTP verification attempts." },
+        "workerResolution": { "type": "string", "enum": ["", "PENDING_REVIEW", "CORRECTION_ACCEPTED", "DISPUTED_BY_WORKER"], "description": "Worker review resolution after counterparty response." },
+        "appliedToLedgerAt": { "type": "string", "format": "date-time", "description": "Timestamp when counterparty statuses were synced to worker collections." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp via FieldValue.serverTimestamp()." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp via FieldValue.serverTimestamp()." }
+      },
+      "required": [
+        "userId", "workerId", "incomeRecordId", "partyId", "partyName",
+        "requestedAmountRupees", "status", "responseNote", "createdAt", "updatedAt"
+      ]
+    },
+    "ShareLink": {
+      "title": "ShareLink",
+      "description": "Consent-scoped read-only share report configuration and frozen snapshot.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Firebase Auth UID of the owner." },
+        "workerId": { "type": "string", "description": "Owning worker profile document ID." },
+        "workerName": { "type": "string", "description": "Worker display name at sharing time." },
+        "shareCode": { "type": "string", "description": "Short human-readable code for reviewer preview." },
+        "recipientLabel": { "type": "string", "description": "Intended recipient label (e.g. Landlord, Co-op)." },
+        "dateRangeLabel": { "type": "string", "description": "Consented reporting window label." },
+        "includedPartyIds": { "type": "array", "description": "List of consented party IDs." },
+        "includedEvidenceLevels": { "type": "array", "description": "List of consented evidence status codes." },
+        "maskBankRefs": { "type": "boolean", "description": "True if UTR and bank account hints are masked." },
+        "expiresOn": { "type": "string", "description": "ISO date YYYY-MM-DD when link expires." },
+        "status": { "type": "string", "enum": ["ACTIVE", "REVOKED"] },
+        "totalIncludedRupees": { "type": "integer", "description": "Total rupees across included records at share creation." },
+        "summaryLines": { "type": "array", "description": "Frozen read-only report lines for Reviewer View." },
+        "consentText": { "type": "string", "description": "Explicit consent statement confirmed by worker." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp via FieldValue.serverTimestamp()." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp via FieldValue.serverTimestamp()." }
+      },
+      "required": [
+        "userId", "workerId", "workerName", "shareCode", "recipientLabel",
+        "dateRangeLabel", "includedPartyIds", "includedEvidenceLevels", "maskBankRefs",
+        "expiresOn", "status", "totalIncludedRupees", "summaryLines", "consentText",
+        "createdAt", "updatedAt"
+      ]
+    },
+    "AuditLogEntry": {
+      "title": "AuditLogEntry",
+      "description": "Immutable transparency log tracking worker, rule, AI, and simulated party actions.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Firebase Auth UID of the owner." },
+        "workerId": { "type": "string", "description": "Owning worker profile document ID." },
+        "actionType": { "type": "string", "description": "Action identifier." },
+        "actorRole": { "type": "string", "enum": ["WORKER", "RULES", "AI", "PARTY_SIMULATED"] },
+        "targetCollection": { "type": "string", "description": "Affected Firestore collection name." },
+        "targetId": { "type": "string", "description": "Affected document ID." },
+        "summary": { "type": "string", "description": "Plain-English description of what happened." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp via FieldValue.serverTimestamp()." }
+      },
+      "required": [
+        "userId", "workerId", "actionType", "actorRole",
+        "targetCollection", "targetId", "summary", "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/workers/{workerId}": {
+      "schema": { "$ref": "#/entities/Worker" },
+      "description": "Worker profiles owned by the signed-in user."
+    },
+    "/parties/{partyId}": {
+      "schema": { "$ref": "#/entities/Party" },
+      "description": "Platforms, clients, contractors, and households the worker earns from."
+    },
+    "/relationships/{relationshipId}": {
+      "schema": { "$ref": "#/entities/Relationship" },
+      "description": "Work relationships linking workers and parties."
+    },
+    "/income_records/{recordId}": {
+      "schema": { "$ref": "#/entities/IncomeRecord" },
+      "description": "Evidence-labeled income entries owned by the worker."
+    },
+    "/documents/{documentId}": {
+      "schema": { "$ref": "#/entities/IncomeDocument" },
+      "description": "Uploaded or sample income documents and AI extraction drafts."
+    },
+    "/bank_credits/{creditId}": {
+      "schema": { "$ref": "#/entities/BankCredit" },
+      "description": "Bank and UPI credit entries for rule-based reconciliation."
+    },
+    "/reconciliations/{reconciliationId}": {
+      "schema": { "$ref": "#/entities/Reconciliation" },
+      "description": "Rule-engine matches linking income records to bank credits."
+    },
+    "/confirmation_requests/{requestId}": {
+      "schema": { "$ref": "#/entities/ConfirmationRequest" },
+      "description": "Simulated party confirmation requests and responses."
+    },
+    "/share_links/{shareLinkId}": {
+      "schema": { "$ref": "#/entities/ShareLink" },
+      "description": "Consent-scoped read-only share links and frozen snapshots."
+    },
+    "/audit_log/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLogEntry" },
+      "description": "Append-only audit trail of AI, rule, worker, and simulated party events."
+    }
+  }
+}
